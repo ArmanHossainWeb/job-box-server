@@ -32,6 +32,7 @@ async function run() {
     await client.connect();
     
     const jobsCollection = client.db("jobBox").collection("jobs")
+    const applicationsCollection = client.db("jobBox").collection("applications")
 
     // jobs api 
     app.get("/jobs", async (req,res)=>{
@@ -45,6 +46,34 @@ async function run() {
       const result = await jobsCollection.findOne(query)
       res.send(result)
     })
+
+    // job  applications releted  api
+    app.get("/applications", async (req,res)=> {
+      const email = req.query.email;
+      const query = {
+        applicant: email
+      }
+      const result = await applicationsCollection.find(query).toArray()
+      // bad way to aggregate data 
+      for(const application of result){
+        const jobId = application.jobId
+        const jobQuery = {_id: new ObjectId(jobId)}
+        const job = await jobsCollection.findOne(jobQuery)
+        application.company = job.company;
+        application.title = job.title;
+        application.company_logo = job.company_logo;
+      }
+
+      res.send(result)
+    })
+
+    app.post("/applications", async (req, res)=> {
+      const applications = req.body;
+      console.log(applications);
+      const result = await applicationsCollection.insertOne(applications)
+      res.send(result)
+    }) 
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
