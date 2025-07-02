@@ -1,15 +1,45 @@
 const express = require('express');
 const cors = require("cors");
+const app = express();
 const jwt = require('jsonwebtoken');
-const app = express()
+const cookieParser = require('cookie-parser');
 const port = process.env.PORT || 3000;
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config()
 
 
 // midelWare 
-app.use(cors());
+app.use(cors({
+  origin: ["http://localhost:5173"],
+  credentials:true
+}));
 app.use(express.json());
+app.use(cookieParser())
+
+const logger = (req, res, next) => {
+  console.log("inside the logger middleware");
+  next()
+}
+
+const verifyToken = (req, res, next) => {
+  const token = req?.cookies?.token;
+  console.log("cookie in the middleware ", token);
+  if(!token){
+    return res.status(401).send({message: "unauthorized access"})
+  }
+  // verify token 
+  jwt.verify(token, process.env.JWT_ACCESS_SECRET, (err , decoded) => {
+    if(err){
+      return res.status(401).send({message: "unauthorized access"})
+    }
+    req.decoded = decoded;
+    console.log(decoded.email);
+    next()
+  })
+
+
+  
+}
 
 
 
@@ -34,18 +64,25 @@ async function run() {
     const jobsCollection = client.db("jobBox").collection("jobs")
     const applicationsCollection = client.db("jobBox").collection("applications")
 
+  
     // jwt token releted api 
-    app.post("/jwt", async (req, res) => {
-      const {email} = req.body;
-      const user = {email}
-      const token = jwt.sign(user, "secret", {expiresIn: "1h"})
-      res.send({token})
+    app.post("/jwt", async (req, res)=> {
+      const user = req.body;
+      console.log(user);
+      const token = jwt.sign(user, process.env.JWT_ACCESS_SECRET, {expiresIn: '1d'})
+      // set token in the cookies 
+      res.cookie("token", token,{
+        httpOnly: true,
+        secure: true,
+        sameSite: "none"
+      })
+      res.send({success: true})
     })
 
-    
 
 
-    // jobs api 
+
+    // jobs api
     app.get("/jobs", async (req,res)=>{
       const email = req.query.email;
       const query = {}
@@ -56,6 +93,29 @@ async function run() {
         const result = await cursor.toArray();
         res.send(result)
     })
+
+     app.get('/jobs/applications', verifyToken, async (req, res) => {
+      const email = req.query.email;
+      console.log(email);
+      console.log(req.decoded.email);
+
+      if (email !== req.decoded.email) {
+        return res.status(403).send({ message: 'forbidden access' })
+      }
+
+      const query = { hr_email: email };
+      const jobs = await jobsCollection.find(query).toArray();
+
+      // should use aggregate to have optimum data fetching
+      for (const job of jobs) {
+        const applicationQuery = { jobId: job._id.toString() }
+        const application_count = await applicationsCollection.countDocuments(applicationQuery)
+        job.application_count = application_count;
+      }
+      res.send(jobs);
+
+    })
+    
     app.get("/jobs/:id", async (req, res)=> {
       const id = req.params.id;
       const query = {_id: new ObjectId(id)}
@@ -71,14 +131,17 @@ async function run() {
 
 
 
-
     // job  applications releted  api
-    app.get("/applications", async (req,res)=> {
+    app.get("/applications",  verifyToken, logger, async (req,res)=> {
       const email = req.query.email;
-      const query = {
-        applicant: email
+      console.log(email);
+      console.log(req.decoded);
+
+      if(email !== req.decoded.email){
+        return res.status(403).send({message: "forbidden access"})
       }
 
+       const query = { applicant: email };
       
       const result = await applicationsCollection.find(query).toArray()
       // bad way to aggregate data 
@@ -91,7 +154,7 @@ async function run() {
         application.company_logo = job.company_logo;
       }
 
-      res.send(result)
+      res.json(result);
     })
 
     app.get("/applications/job/:job_id", async (req, res)=>{
